@@ -1,69 +1,279 @@
-import asyncio
+
+import logging
+import os
+import shutil
 import subprocess
-from fastapi import FastAPI, HTTPException
+from typing import Iterator
+
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from yt_dlp import YoutubeDL
 
-app = FastAPI()
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO")
+)
+logger = logging.getLogger("web_music_proxy")
 
-# Cấu hình bộ tìm kiếm yt-dlp tối ưu tốc độ cho Render
-ydl_opts = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
-    'default_search': 'ytsearch',
-    'extract_flat': False,
-}
+app = FastAPI(
+    title="ESP32 Web Music Proxy",
+    version="2.0.0"
+)
 
-def stream_pcm_generator(audio_url: str):
-    """Sử dụng ffmpeg có sẵn của Render để băm và dịch trực tiếp sang PCM 24kHz, Mono"""
+SAMPLE_RATE = 24000
+CHANNELS = 1
+CHUNK_SIZE = 4096
+
+
+def build_ydl_options() -> dict:
+    opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": False,
+        "default_search": "ytsearch",
+        "extract_flat": False,
+        "socket_timeout": 20,
+        "retries": 2,
+        "fragment_retries": 2,
+    }
+
+    pot_provider_url = os.getenv(
+        "BGUTIL_POT_BASE_URL", ""
+    ).strip().rstrip("/")
+
+    if pot_provider_url:
+        opts["extractor_args"] = {
+            "youtubepot-bgutilhttp": {
+                "base_url": pot_provider_url
+            }
+        }
+        logger.info("Bgutil PO-token provider configured")
+    else:
+        logger.warning(
+            "BGUTIL_POT_BASE_URL is not set"
+        )
+
+    return opts
+
+
+def stream_pcm_generator(
+    audio_url: str,
+    http_headers: dict | None = None
+) -> Iterator[bytes]:
+
+    if not shutil.which("ffmpeg"):
+        logger.error("FFmpeg not found")
+        return
+
     command = [
-        'ffmpeg',
-        '-i', audio_url,
-        '-f', 's16le',
-        '-ar', '24000',  # Tần số lấy mẫu 24000Hz chuẩn chip ES8311 của robot
-        '-ac', '1',      # 1 Kênh (Mono)
-        '-acodec', 'pcm_s16le',
-        'pipe:1'         # Đẩy luồng dữ liệu thô ra stdout
+        "ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error"
     ]
-    
-    # Khởi tạo tiến trình chạy ffmpeg ngầm trên môi trường Linux của Render
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    
+
+    if http_headers:
+        header_blob = "".join(
+            f"{key}: {value}\r\n"
+            for key, value in http_headers.items()
+        )
+
+        if header_blob:
+            command += [
+                "-headers",
+                header_blob
+            ]
+
+    command += [
+        "-i", audio_url,
+        "-vn",
+        "-f", "s16le",
+        "-acodec", "pcm_s16le",
+        "-ar", str(SAMPLE_RATE),
+        "-ac", str(CHANNELS),
+        "pipe:1"
+    ]
+
+    process = None
+
     try:
+        logger.info(
+            "Starting FFmpeg: %d Hz mono PCM",
+            SAMPLE_RATE
+        )
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0
+        )
+
+        assert process.stdout is not None
+
         while True:
-            # Đọc từng block dữ liệu 4KB và đổ liên tục về cho ESP32-S3 qua Wi-Fi
-            data = process.stdout.read(4096)
-            if not data:
+            chunk = process.stdout.read(CHUNK_SIZE)
+
+            if not chunk:
                 break
-            yield data
+
+            yield chunk
+
+        return_code = process.wait(timeout=10)
+
+        if return_code != 0:
+            logger.error(
+                "FFmpeg exited with code %s",
+                return_code
+            )
+
+    except GeneratorExit:
+        logger.info("Client disconnected")
+        raise
+
+    except Exception:
+        logger.exception("PCM streaming error")
+
     finally:
-        process.kill()
+        if process is not None:
+
+            if process.poll() is None:
+                process.terminate()
+
+                try:
+                    process.wait(timeout=3)
+
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+            if process.stdout:
+                process.stdout.close()
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "ffmpeg_available": (
+            shutil.which("ffmpeg") is not None
+        ),
+        "po_token_provider_configured": bool(
+            os.getenv("BGUTIL_POT_BASE_URL", "").strip()
+        )
+    }
+
 
 @app.get("/play")
-async def play_music(q: str):
-    if not q:
-        raise HTTPException(status_code=400, detail="Thiếu từ khóa tìm kiếm 'q'")
-        
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            # Tiến hành tìm kiếm 1 kết quả duy nhất dựa trên từ khóa người dùng yêu cầu
-            info = ydl.extract_info(f"ytsearch1:{q}", download=False)
-            if not info or 'entries' not in info or len(info['entries']) == 0:
-                raise HTTPException(status_code=404, detail="Không tìm thấy bài hát phù hợp")
-                
-            video_info = info['entries'][0]
-            direct_audio_url = video_info['url']  # Lấy trực tiếp URL luồng phát của bài nhạc
-            
-            # Phản hồi luồng streaming PCM thô về cho robot giải mã trực tiếp ra loa
-            return StreamingResponse(
-                stream_pcm_generator(direct_audio_url),
-                media_type="audio/pcm"
-            )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def play_music(
+    q: str = Query(
+        ...,
+        min_length=1,
+        max_length=300
+    )
+):
 
-# Thiết lập cổng 10000 theo đúng chuẩn quy định môi trường nhận diện của Render
+    query = q.strip()
+
+    if not query:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing search query"
+        )
+
+    logger.info(
+        "Music search requested: %s",
+        query
+    )
+
+    try:
+
+        with YoutubeDL(build_ydl_options()) as ydl:
+
+            info = ydl.extract_info(
+                f"ytsearch1:{query}",
+                download=False
+            )
+
+            entries = (info or {}).get("entries") or []
+
+            video = next(
+                (item for item in entries if item),
+                None
+            )
+
+            if not video:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No matching music found"
+                )
+
+            audio_url = video.get("url")
+
+            if not audio_url:
+                raise HTTPException(
+                    status_code=502,
+                    detail="No audio URL returned"
+                )
+
+            title = video.get(
+                "title",
+                "unknown"
+            )
+
+            headers = video.get(
+                "http_headers"
+            ) or {}
+
+            logger.info(
+                "Selected audio: %s",
+                title
+            )
+
+        return StreamingResponse(
+            stream_pcm_generator(
+                audio_url,
+                headers
+            ),
+            media_type="audio/pcm",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Audio-Format": "s16le",
+                "X-Audio-Sample-Rate": str(SAMPLE_RATE),
+                "X-Audio-Channels": str(CHANNELS)
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+
+        logger.exception(
+            "yt-dlp failed: %s",
+            query
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Music source could not be resolved: "
+                + type(exc).__name__
+            )
+        ) from exc
+
+
 if __name__ == "__main__":
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+
+    port = int(
+        os.getenv("PORT", "10000")
+    )
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
+    )
