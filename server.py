@@ -35,8 +35,11 @@ def build_ydl_options() -> dict:
         "socket_timeout": 20,
         "retries": 2,
         "fragment_retries": 2,
+        # Thêm cấu hình đọc file cookies
+        "cookiefile": "cookies.txt",
     }
 
+    # Bạn có thể giữ lại hoặc xóa hẳn khối kiểm tra BGUTIL_POT_BASE_URL nếu không dùng nữa
     pot_provider_url = os.getenv(
         "BGUTIL_POT_BASE_URL", ""
     ).strip().rstrip("/")
@@ -49,12 +52,9 @@ def build_ydl_options() -> dict:
         }
         logger.info("Bgutil PO-token provider configured")
     else:
-        logger.warning(
-            "BGUTIL_POT_BASE_URL is not set"
-        )
+        logger.info("Using cookies.txt authentication method")
 
     return opts
-
 
 def stream_pcm_generator(
     audio_url: str,
