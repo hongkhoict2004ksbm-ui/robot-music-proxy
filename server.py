@@ -25,8 +25,8 @@ CHUNK_SIZE = 4096
 
 def build_ydl_options() -> dict:
     opts = {
-        # Nới lỏng định dạng để yt-dlp tự động chọn audio tốt nhất có thể
-        "format": "ba[ext=m4a]/ba/best",
+        # Mở rộng dải chọn format để tránh lỗi "Requested format is not available"
+        "format": "bestaudio/best",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": False,
@@ -36,14 +36,8 @@ def build_ydl_options() -> dict:
         "retries": 3,
         "fragment_retries": 3,
         "cookiefile": "cookies.txt",
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"]
-            }
-        }
     }
     return opts
-
 def stream_pcm_generator(
     audio_url: str,
     http_headers: dict | None = None
