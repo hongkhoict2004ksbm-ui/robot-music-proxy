@@ -259,3 +259,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port
     )
+@app.get("/")
+def read_root():
+    return {"status": "online", "message": "ESP32 Web Music Proxy is running"}
