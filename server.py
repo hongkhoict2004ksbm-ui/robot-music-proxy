@@ -25,7 +25,6 @@ CHUNK_SIZE = 4096
 
 def build_ydl_options() -> dict:
     opts = {
-        # Mở rộng dải chọn format để tránh lỗi "Requested format is not available"
         "format": "bestaudio/best",
         "noplaylist": True,
         "quiet": True,
@@ -34,8 +33,12 @@ def build_ydl_options() -> dict:
         "extract_flat": False,
         "socket_timeout": 20,
         "retries": 3,
-        "fragment_retries": 3,
         "cookiefile": "cookies.txt",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web"]
+            }
+        }
     }
     return opts
 def stream_pcm_generator(
