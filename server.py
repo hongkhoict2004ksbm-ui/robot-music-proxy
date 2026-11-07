@@ -25,7 +25,8 @@ CHUNK_SIZE = 4096
 
 def build_ydl_options() -> dict:
     opts = {
-        "format": "bestaudio/best",
+        # Nới lỏng định dạng để yt-dlp tự động chọn audio tốt nhất có thể
+        "format": "ba[ext=m4a]/ba/best",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": False,
@@ -33,8 +34,8 @@ def build_ydl_options() -> dict:
         "extract_flat": False,
         "socket_timeout": 20,
         "retries": 3,
+        "fragment_retries": 3,
         "cookiefile": "cookies.txt",
-        # Thêm cấu hình extractor_args để né bot check hiệu quả hơn
         "extractor_args": {
             "youtube": {
                 "player_client": ["android", "web"]
