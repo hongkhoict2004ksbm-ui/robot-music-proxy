@@ -23,7 +23,6 @@ SAMPLE_RATE = 24000
 CHANNELS = 1
 CHUNK_SIZE = 4096
 
-
 def build_ydl_options() -> dict:
     opts = {
         "format": "bestaudio/best",
@@ -33,27 +32,15 @@ def build_ydl_options() -> dict:
         "default_search": "ytsearch",
         "extract_flat": False,
         "socket_timeout": 20,
-        "retries": 2,
-        "fragment_retries": 2,
-        # Thêm cấu hình đọc file cookies
+        "retries": 3,
         "cookiefile": "cookies.txt",
-    }
-
-    # Bạn có thể giữ lại hoặc xóa hẳn khối kiểm tra BGUTIL_POT_BASE_URL nếu không dùng nữa
-    pot_provider_url = os.getenv(
-        "BGUTIL_POT_BASE_URL", ""
-    ).strip().rstrip("/")
-
-    if pot_provider_url:
-        opts["extractor_args"] = {
-            "youtubepot-bgutilhttp": {
-                "base_url": pot_provider_url
+        # Thêm cấu hình extractor_args để né bot check hiệu quả hơn
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
             }
         }
-        logger.info("Bgutil PO-token provider configured")
-    else:
-        logger.info("Using cookies.txt authentication method")
-
+    }
     return opts
 
 def stream_pcm_generator(
