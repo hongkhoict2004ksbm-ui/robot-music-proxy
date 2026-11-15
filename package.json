@@ -1,8 +1,9 @@
 {
-  "name": "esp32-web-music-proxy",
+  "name": "otto-youtube-vercel",
   "version": "1.0.0",
-  "engines": {
-    "node": ">=18.x"
-  },
-  "dependencies": {}
+  "private": true,
+  "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
+    "yt-search": "^2.12.1"
+  }
 }
